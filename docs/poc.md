@@ -150,21 +150,37 @@ That is enough for the POC. Record raw provider events for debugging, but do not
 
 Run the installed `codex app-server` and use its documented JSON-RPC transport. Generate TypeScript definitions from the installed CLI when practical instead of maintaining guessed protocol types.
 
+<<<<<<< HEAD
 The adapter initializes the server, starts or resumes a thread, starts a turn, translates the events Passoff cares about, and interrupts a turn when asked. Approval requests must reach the caller. The adapter must never approve them itself.
+=======
+The adapter initializes the server, validates the configured or default model against `model/list`, starts or resumes a thread, starts a turn, translates the events Passoff cares about, and interrupts a turn when asked. Approval requests must reach the caller. The adapter must never approve them itself. Treat only a completed `agentMessage` whose phase is `final_answer` as the result; commentary messages may also be emitted while native structured output is active.
+
+A Codex agent running in the read-only sandbox cannot reliably start Claude Code as a shell child because that child cannot access Claude's native login. For Codex-to-Claude handoffs, expose a narrow Passoff dynamic tool through app-server and let the Passoff host start Claude under Claude's own restrictions. Dynamic tools currently require the app-server client's `experimentalApi` capability, so keep this behind the Codex adapter and cover the generated protocol shape with fixtures.
+>>>>>>> chore/passoff-feasibility-spike
 
 ## Claude Code integration
 
 Start with the installed Claude Code CLI in print mode with structured streaming. Capture its session ID and pass that ID to `--resume` for follow-ups.
 
+<<<<<<< HEAD
 The official TypeScript Agent SDK is an option if it makes lifecycle handling materially simpler. We should not switch merely because an SDK looks cleaner in a dependency list.
 
 The adapter starts and resumes runs, translates useful stream events, and reports completion, failure, permission requests, and questions. It must use supported CLI or SDK operations instead of depending on Claude Code's private transcript layout.
+=======
+Use `--restricted --strict-mcp-config` and an explicit tool list for reviewer runs. Restrictions must be supplied again on resume; a resumed session can otherwise restore tools from its persisted configuration.
+
+The CLI adapter starts and resumes runs, translates useful stream events, and reports completion, failure, denied tool calls, and questions. In plain print mode, commands that need approval are denied and reported in the final `permission_denials` array; a plain stdio consumer does not receive an interactive approval callback even with `--permission-prompts host`. If the POC needs a live approve-or-decline loop for Claude, use the official Agent SDK or a supported permission-prompt host. Do not depend on Claude Code's private transcript layout.
+>>>>>>> chore/passoff-feasibility-spike
 
 ## Permissions
 
 The first target is a read-only reviewer. It can inspect files and Git state, and run checks we explicitly allow. It cannot edit files, commit, change configuration, or approve its own permission requests.
 
+<<<<<<< HEAD
 When the target needs more access, Passoff emits `approval.required` and gives the decision back to the invoking harness or user. Blanket permission bypass flags are out.
+=======
+When Codex needs more access, Passoff emits `approval.required` from the app-server request and gives the decision back to the invoking harness or user. A Claude print-mode reviewer runs fail-closed: permission-requiring calls are denied and the final result is reported as blocked. A live Claude approval round trip requires the Agent SDK or another supported permission host. Blanket permission bypass flags are out.
+>>>>>>> chore/passoff-feasibility-spike
 
 An implementer role comes later and runs in an isolated Git worktree.
 

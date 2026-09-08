@@ -41,6 +41,8 @@ export const turnStartResponseSchema = z.object({
   turn: z.object({ id: z.string().min(1) }),
 });
 
+export const turnInterruptResponseSchema = z.looseObject({});
+
 const itemCompletedSchema = z.object({
   method: z.literal("item/completed"),
   params: z.object({

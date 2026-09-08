@@ -3,7 +3,15 @@ import { defineCommand } from "citty";
 
 import { runCodexReview } from "../../harnesses/codex/codex-adapter.ts";
 import { buildReviewPrompt, reviewOutputSchema } from "./review-prompt.ts";
-import { resolveReviewRepository } from "./repository.ts";
+import {
+  fingerprintRepository,
+  resolveReviewRepository,
+} from "./repository.ts";
+import {
+  parseTimeoutSeconds,
+  RunCancellation,
+} from "./run-cancellation.ts";
+import { isHandoffInterruptedError } from "../../harnesses/harness-interruption.ts";
 import { SessionStore } from "./session-store.ts";
 import { runRecordedReview } from "../run-history/run-recorded-review.ts";
 import { RunStore } from "../run-history/run-store.ts";
@@ -53,6 +61,10 @@ export const askCommand = defineCommand({
       description: "Save sanitized Codex protocol messages with the run",
       default: false,
     },
+    timeout: {
+      type: "string",
+      description: "Stop the review after this many seconds",
+    },
   },
   async run({ args, rawArgs }) {
     try {
@@ -68,6 +80,7 @@ export const askCommand = defineCommand({
 
       const repository = await resolveReviewRepository(process.cwd(), args.base);
       const sessionName = args.session?.trim();
+      const timeoutSeconds = parseTimeoutSeconds(args.timeout);
 
       if (args.session !== undefined && sessionName === "") {
         throw new Error("The session name cannot be empty.");
@@ -75,33 +88,48 @@ export const askCommand = defineCommand({
 
       const sessionStore = await SessionStore.forRepository(repository.root);
       const runStore = await RunStore.forRepository(repository.root);
-      const result = await runRecordedReview(
-        {
-          task: args.task,
-          baseRevision: repository.baseRevision,
-          sourceHarness: args.source,
-          debugCapture: args["debug-capture"],
-          review: {
-            cwd: repository.root,
-            prompt: buildReviewPrompt({
-              task: args.task,
-              repository: repository.root,
-              baseRevision: repository.baseRevision,
-            }),
-            outputSchema: reviewOutputSchema,
-            model: args.model,
-            sessionName,
-            onProgress: (text) => process.stderr.write(text),
-          },
-        },
-        { sessionStore, runStore, runReview: runCodexReview },
-      );
+      const repositoryFingerprint = await fingerprintRepository(repository.root);
+      const cancellation = new RunCancellation({ timeoutSeconds });
 
-      process.stdout.write(`${JSON.stringify(result)}\n`);
+      try {
+        const result = await runRecordedReview(
+          {
+            task: args.task,
+            baseRevision: repository.baseRevision,
+            sourceHarness: args.source,
+            debugCapture: args["debug-capture"],
+            repositoryFingerprint,
+            review: {
+              cwd: repository.root,
+              prompt: buildReviewPrompt({
+                task: args.task,
+                repository: repository.root,
+                baseRevision: repository.baseRevision,
+              }),
+              outputSchema: reviewOutputSchema,
+              model: args.model,
+              sessionName,
+              signal: cancellation.signal,
+              onProgress: (text) => process.stderr.write(text),
+            },
+          },
+          {
+            sessionStore,
+            runStore,
+            runReview: runCodexReview,
+            readRepositoryFingerprint: fingerprintRepository,
+            onTerminalStateDecided: () => cancellation.freeze(),
+          },
+        );
+
+        process.stdout.write(`${JSON.stringify(result)}\n`);
+      } finally {
+        cancellation.dispose();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Passoff failed.";
       process.stderr.write(`passoff: ${message}\n`);
-      process.exitCode = 1;
+      process.exitCode = isHandoffInterruptedError(error) ? error.exitCode : 1;
     }
   },
 });
@@ -120,6 +148,7 @@ function assertSupportedArguments(rawArgs: string[]): void {
       source: { type: "string" },
       session: { type: "string" },
       "debug-capture": { type: "boolean" },
+      timeout: { type: "string" },
     },
   });
 

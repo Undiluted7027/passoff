@@ -4,12 +4,21 @@ import {
   parseReviewResult,
   type ReviewResult,
 } from "../../features/ask-codex/review-result.ts";
+import {
+  HandoffInterruptedError,
+  interruptionFromSignal,
+} from "../harness-interruption.ts";
+import {
+  interruptWithin,
+  waitForReviewOrInterruption,
+} from "./interruptible-review.ts";
 import { JsonRpcConnection } from "./json-rpc-connection.ts";
 import {
   codexLifecycleMessageSchema,
   modelListResponseSchema,
   threadOpenResponseSchema,
   turnStartResponseSchema,
+  turnInterruptResponseSchema,
   type RpcMessage,
 } from "./protocol.ts";
 import { createCodexProcessTransport } from "./process-transport.ts";
@@ -22,7 +31,9 @@ export type CodexReviewInput = {
   nativeSessionId?: string;
   onNativeSessionOpened: (nativeSessionId: string) => Promise<void>;
   onProviderMessage?: (message: unknown) => void;
+  onApprovalRequired?: (method: string) => Promise<void>;
   onProgress: (text: string) => void;
+  signal?: AbortSignal;
 };
 
 const initializeResponseSchema = z.object({ userAgent: z.string() });
@@ -36,7 +47,15 @@ export async function runCodexReview(
     input.onProviderMessage,
   );
 
-  try {
+  let activeTurn: { threadId: string; turnId: string } | undefined;
+  const interrupt = async (turn: { threadId: string; turnId: string }) => {
+    await connection.request(
+      "turn/interrupt",
+      turn,
+      turnInterruptResponseSchema,
+    );
+  };
+  const review = async () => {
     await connection.request(
       "initialize",
       {
@@ -63,7 +82,7 @@ export async function runCodexReview(
       `${input.nativeSessionId ? "Resumed" : "Starting"} Codex review with ${model}.\n`,
     );
 
-    await connection.request(
+    const startedTurn = await connection.request(
       "turn/start",
       {
         threadId: openedThread.id,
@@ -76,11 +95,44 @@ export async function runCodexReview(
       },
       turnStartResponseSchema,
     );
+    activeTurn = { threadId: openedThread.id, turnId: startedTurn.turn.id };
 
-    return await collectReviewResult(
+    const result = await collectReviewResult(
       () => connection.nextServerMessage(),
       input.onProgress,
+      input.onApprovalRequired,
     );
+
+    if (result.status === "blocked") {
+      await interruptWithin(activeTurn, interrupt);
+    }
+
+    return result;
+  };
+
+  const reviewPromise = review();
+
+  try {
+    try {
+      return await waitForReviewOrInterruption({
+        review: reviewPromise,
+        signal: input.signal,
+        activeTurn: () => activeTurn,
+        interrupt,
+      });
+    } catch (error) {
+      // The native interrupted event may arrive before turn/interrupt replies.
+      // Preserve the caller's deadline or signal as the terminal reason.
+      if (input.signal?.aborted) {
+        await connection.close();
+        // Closing rejects pending protocol work. Drain it so session callbacks
+        // finish before run history writes the interrupted terminal record.
+        await reviewPromise.catch(() => undefined);
+        throw interruptionFromSignal(input.signal);
+      }
+
+      throw error;
+    }
   } finally {
     await connection.close();
   }
@@ -193,6 +245,7 @@ function selectModel(
 export async function collectReviewResult(
   nextMessage: () => Promise<RpcMessage>,
   onProgress: (text: string) => void = () => undefined,
+  onApprovalRequired: (method: string) => Promise<void> = async () => undefined,
 ): Promise<ReviewResult> {
   // Structured turns may emit commentary agent messages. Only final_answer is
   // the review payload, and it is not trusted until the turn itself completes.
@@ -203,9 +256,14 @@ export async function collectReviewResult(
     const message = await nextMessage();
 
     if (message.id !== undefined) {
-      throw new Error(
-        `Codex requested host action ${message.method}; read-only reviews cannot approve requests.`,
-      );
+      await onApprovalRequired(message.method);
+
+      return {
+        status: "blocked",
+        summary: `Codex requested host action ${message.method}; read-only reviews cannot approve requests.`,
+        findings: [],
+        checks: [],
+      };
     }
 
     const lifecycle = codexLifecycleMessageSchema.safeParse(message);
@@ -247,6 +305,14 @@ export async function collectReviewResult(
     const { turn } = lifecycle.data.params;
 
     if (turn.status !== "completed") {
+      if (turn.status === "interrupted") {
+        throw new HandoffInterruptedError(
+          turn.error?.message ?? "Codex reported that the review was interrupted.",
+          "native_interruption",
+          1,
+        );
+      }
+
       throw new Error(
         turn.error?.message ?? `Codex review ended with status ${turn.status}.`,
       );

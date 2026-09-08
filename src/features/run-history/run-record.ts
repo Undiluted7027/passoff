@@ -63,12 +63,22 @@ export const runEventSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
   }),
   z.strictObject({
+    type: z.literal("approval.required"),
+    timestamp: z.iso.datetime(),
+    method: z.string().min(1),
+  }),
+  z.strictObject({
     type: z.literal("session.completed"),
     timestamp: z.iso.datetime(),
     status: reviewStatusSchema,
   }),
   z.strictObject({
     type: z.literal("session.failed"),
+    timestamp: z.iso.datetime(),
+    message: z.string().min(1),
+  }),
+  z.strictObject({
+    type: z.literal("session.interrupted"),
     timestamp: z.iso.datetime(),
     message: z.string().min(1),
   }),

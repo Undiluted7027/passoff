@@ -67,6 +67,7 @@ export class JsonRpcConnection {
   #nextId = 0;
   readonly #reader: Promise<void>;
   #failure: Error | undefined;
+  #closing: Promise<void> | undefined;
 
   constructor(
     private readonly transport: RpcTransport,
@@ -108,7 +109,12 @@ export class JsonRpcConnection {
     return this.#serverMessages.next();
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.#closing ??= this.closeTransport();
+    return this.#closing;
+  }
+
+  private async closeTransport(): Promise<void> {
     await this.transport.close();
     await this.#reader.catch(() => undefined);
   }

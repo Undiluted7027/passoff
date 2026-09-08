@@ -4,7 +4,10 @@ import type { SessionStore } from "./session-store.ts";
 
 export type ReviewSessionInput = Omit<
   CodexReviewInput,
-  "nativeSessionId" | "onNativeSessionOpened" | "onProviderMessage"
+  | "nativeSessionId"
+  | "onNativeSessionOpened"
+  | "onProviderMessage"
+  | "onApprovalRequired"
 > & {
   sessionName?: string;
 };
@@ -14,6 +17,7 @@ type ReviewSessionDependencies = {
   runReview: (input: CodexReviewInput) => Promise<ReviewResult>;
   onSessionStarted?: (nativeSessionId: string) => Promise<void>;
   onProviderMessage?: (message: unknown) => void;
+  onApprovalRequired?: (method: string) => Promise<void>;
 };
 
 /** Resolves a friendly name and saves the native thread as soon as it opens. */
@@ -34,6 +38,7 @@ export async function runReviewSession(
     ...reviewInput,
     nativeSessionId,
     onProviderMessage: dependencies.onProviderMessage,
+    onApprovalRequired: dependencies.onApprovalRequired,
     async onNativeSessionOpened(openedSessionId) {
       // Save before the turn starts. A malformed result or failed turn should
       // not discard a native thread that Codex can still resume.

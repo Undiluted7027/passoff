@@ -64,6 +64,7 @@ passoff ask codex \
   --source claude \
   --role reviewer \
   --session auth-review \
+  --timeout 300 \
   "Review the current diff for authorization bugs"
 ```
 
@@ -76,6 +77,8 @@ passoff ask codex \
 ```
 
 Progress goes to stderr. The final machine-readable result goes to stdout so scripts and parent agents can consume it without parsing progress logs.
+
+`--timeout` sets a deadline in seconds. Pressing Ctrl-C, receiving `SIGTERM`, or reaching the deadline interrupts the active native turn and records the run as interrupted before Passoff exits.
 
 Inspect the latest run in a named Codex session:
 
@@ -151,9 +154,10 @@ type HarnessEvent =
   | { type: "message.delta"; text: string }
   | { type: "tool.started"; name: string }
   | { type: "tool.completed"; name: string }
-  | { type: "approval.required"; request: ApprovalRequest }
-  | { type: "session.completed"; result: string }
-  | { type: "session.failed"; message: string };
+  | { type: "approval.required"; method: string }
+  | { type: "session.completed"; status: "approved" | "changes_requested" | "blocked" }
+  | { type: "session.failed"; message: string }
+  | { type: "session.interrupted"; message: string };
 ```
 
 The POC does not need a larger public event model. Keep raw provider events in memory while parsing them, and persist sanitized excerpts only when debug logging is enabled.
@@ -180,7 +184,7 @@ The first target is a read-only reviewer. It can inspect files and Git state. It
 
 The first reviewer flow does not run project tests. Test suites often write caches, coverage data, snapshots, or generated files. Add test execution after we have measured those writes and can grant only the access each check needs.
 
-When Codex needs more access, Passoff emits `approval.required` from the app-server request and gives the decision back to the invoking harness or user. A Claude print-mode reviewer runs fail-closed: permission-requiring calls are denied and the final result is reported as blocked. A live Claude approval round trip requires the Agent SDK or another supported permission host. Blanket permission bypass flags are out.
+When Codex needs more access, Passoff records `approval.required`, interrupts the noninteractive turn, and returns a blocked result. A Claude print-mode reviewer also runs fail-closed: permission-requiring calls are denied and the final result is reported as blocked. A future live approval round trip would require an interactive permission host. Blanket permission bypass flags are out.
 
 An implementer role comes later and runs in an isolated Git worktree.
 
@@ -214,7 +218,7 @@ Callers may identify themselves with `--source claude` or `--source codex`. Omit
 
 Provider messages are not stored unless `--debug-capture` is set. Debug capture removes known credential and environment fields, limits each message, and stops retaining messages when the capture reaches its count or byte limit.
 
-Until [issue #4](https://github.com/Undiluted7027/passoff/issues/4) adds cancellation handling, killing Passoff can leave the latest run marked `running`. The record format already supports interrupted runs; issue #4 will write that terminal state before the process exits.
+Passoff handles `SIGINT`, `SIGTERM`, and explicit deadlines while the CLI is running. It asks the native harness to interrupt its active turn, then writes an interrupted result before exiting. An uncatchable process stop such as `SIGKILL` can still leave the latest run marked `running`.
 
 The POC assumes one active run per named session. [Issue #6](https://github.com/Undiluted7027/passoff/issues/6) tracks how Passoff prevents simultaneous use of the same session.
 
@@ -257,6 +261,8 @@ Use native structured output when the harness supports it. Otherwise validate th
 - Repository state changes during review.
 
 Keep the native session ID and normalized event log after a failure whenever possible. A failed run should still be inspectable and resumable.
+
+Native terminal events decide whether a run completed, failed, or was interrupted; a process exit code cannot override them. A host action request from a noninteractive reviewer produces a blocked result and is never approved by Passoff. Passoff fingerprints HEAD, tracked changes, non-ignored untracked files, and initialized submodule revisions before and after the review. Initialized submodules must be clean because Passoff cannot safely validate a verdict against changing nested worktrees.
 
 ## Tests
 

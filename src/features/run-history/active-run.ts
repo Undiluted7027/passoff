@@ -53,6 +53,15 @@ export class ActiveRun {
     });
   }
 
+  async approvalRequired(method: string): Promise<void> {
+    this.assertRunning();
+    await this.addEvent({
+      type: "approval.required",
+      timestamp: new Date().toISOString(),
+      method,
+    });
+  }
+
   async complete(review: ReviewResult): Promise<void> {
     this.assertRunning();
     const finishedAt = new Date().toISOString();
@@ -75,25 +84,40 @@ export class ActiveRun {
   }
 
   async fail(error: unknown): Promise<void> {
+    await this.finishWithoutReview("failed", error);
+  }
+
+  async interrupt(error: unknown): Promise<void> {
+    await this.finishWithoutReview("interrupted", error);
+  }
+
+  private async finishWithoutReview(
+    status: "failed" | "interrupted",
+    error: unknown,
+  ): Promise<void> {
     this.assertRunning();
     const finishedAt = new Date().toISOString();
     const failureReason = errorMessage(error);
     const result = runResultFileSchema.parse({
       version: 1,
       runId: this.handoff.runId,
-      status: "failed",
+      status,
       finishedAt,
       failureReason,
     });
 
     await writeJsonAtomically(this.path("result.json"), result);
     await this.writeProviderExcerpts();
-    await this.addEvent({
-      type: "session.failed",
-      timestamp: finishedAt,
-      message: failureReason,
-    });
-    await this.finish({ status: "failed", finishedAt, failureReason });
+    const event: RunEvent =
+      status === "failed"
+        ? { type: "session.failed", timestamp: finishedAt, message: failureReason }
+        : {
+            type: "session.interrupted",
+            timestamp: finishedAt,
+            message: failureReason,
+          };
+    await this.addEvent(event);
+    await this.finish({ status, finishedAt, failureReason });
   }
 
   private async finish(

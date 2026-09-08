@@ -6,6 +6,7 @@ import {
   type RpcMessage,
 } from "../../../src/harnesses/codex/protocol.ts";
 import { rejectedError } from "../../support/rejected-error.ts";
+import { isHandoffInterruptedError } from "../../../src/harnesses/harness-interruption.ts";
 
 // Fixtures are sanitized app-server messages. Loading them from disk keeps the
 // ordinary test suite deterministic and prevents accidental model usage.
@@ -55,18 +56,59 @@ test("rejects malformed review output after a successful native turn", async () 
   );
 });
 
-test("refuses requests for host approval", async () => {
+test("turns a host approval request into a blocked review", async () => {
   const request = rpcMessageSchema.parse({
     id: 7,
     method: "item/commandExecution/requestApproval",
     params: { command: "git status" },
   });
 
-  expect(
-    (await rejectedError(collectReviewResult(async () => request))).message,
-  ).toContain(
-    "read-only reviews cannot approve requests",
+  const approvals: string[] = [];
+  const result = await collectReviewResult(
+    async () => request,
+    undefined,
+    async (method) => {
+      approvals.push(method);
+    },
   );
+
+  expect(result).toMatchObject({
+    status: "blocked",
+    summary: expect.stringContaining("read-only reviews cannot approve requests"),
+  });
+  expect(approvals).toEqual(["item/commandExecution/requestApproval"]);
+});
+
+test("classifies non-completed native turns", async () => {
+  const nativeFailure = rpcMessageSchema.parse({
+    method: "turn/completed",
+    params: {
+      turn: {
+        status: "failed",
+        error: { message: "Authentication expired" },
+      },
+    },
+  });
+
+  expect(
+    (await rejectedError(collectReviewResult(async () => nativeFailure))).message,
+  ).toBe("Authentication expired");
+
+  const nativeInterruption = rpcMessageSchema.parse({
+    method: "turn/completed",
+    params: { turn: { status: "interrupted" } },
+  });
+  const error = await rejectedError(
+    collectReviewResult(async () => nativeInterruption),
+  );
+
+  expect(isHandoffInterruptedError(error)).toBe(true);
+
+  if (!isHandoffInterruptedError(error)) {
+    throw new Error("Expected an interrupted handoff error.");
+  }
+
+  expect(error.code).toBe("native_interruption");
 });
 
 test("continues after a retryable Codex error", async () => {

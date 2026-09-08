@@ -72,9 +72,15 @@ Use the same session name for a follow-up:
 
 ```bash
 passoff ask codex \
+  --source claude \
   --session auth-review \
   "Verify the fixes"
 ```
+
+Inside this repository, Claude Code can run the complete review and fix cycle
+through the project skill at `.claude/skills/passoff-review/SKILL.md`. See
+[`docs/claude-to-codex.md`](claude-to-codex.md) for the invocation and live POC
+check.
 
 Codex sessions started by Passoff also receive one host-backed `ask_claude`
 tool. The tool accepts a bounded review task and a Claude session name:

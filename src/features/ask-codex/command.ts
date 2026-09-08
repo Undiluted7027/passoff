@@ -15,6 +15,7 @@ import { isHandoffInterruptedError } from "../../harnesses/harness-interruption.
 import { SessionStore } from "./session-store.ts";
 import { runRecordedReview } from "../run-history/run-recorded-review.ts";
 import { RunStore } from "../run-history/run-store.ts";
+import { createClaudeReviewTool } from "../codex-to-claude/claude-review-tool.ts";
 
 export const askCommand = defineCommand({
   meta: {
@@ -111,6 +112,15 @@ export const askCommand = defineCommand({
               sessionName,
               signal: cancellation.signal,
               onProgress: (text) => process.stderr.write(text),
+              dynamicTool: createClaudeReviewTool(
+                {
+                  cwd: repository.root,
+                  baseRevision: repository.baseRevision,
+                  signal: cancellation.signal,
+                  onProgress: (text) => process.stderr.write(text),
+                },
+                { sessionStore },
+              ),
             },
           },
           {

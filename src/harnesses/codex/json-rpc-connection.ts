@@ -105,6 +105,15 @@ export class JsonRpcConnection {
     await this.transport.send({ method, params });
   }
 
+  /** Replies to a request initiated by app-server using the same request ID. */
+  async respond(id: string | number, result: unknown): Promise<void> {
+    if (this.#failure) {
+      throw this.#failure;
+    }
+
+    await this.transport.send({ id, result });
+  }
+
   nextServerMessage(): Promise<RpcMessage> {
     return this.#serverMessages.next();
   }

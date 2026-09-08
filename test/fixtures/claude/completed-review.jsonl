@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"claude-session-1","permissionMode":"dontAsk"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Reviewing the change."}]},"session_id":"claude-session-1"}
+{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","session_id":"claude-session-1","structured_output":{"status":"approved","summary":"No findings.","checks":[],"findings":[]},"permission_denials":[]}

@@ -43,6 +43,19 @@ export const turnStartResponseSchema = z.object({
 
 export const turnInterruptResponseSchema = z.looseObject({});
 
+export const dynamicToolCallSchema = z.object({
+  method: z.literal("item/tool/call"),
+  id: requestIdSchema,
+  params: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    callId: z.string().min(1),
+    namespace: z.string().nullable(),
+    tool: z.string().min(1),
+    arguments: z.unknown(),
+  }),
+});
+
 const itemCompletedSchema = z.object({
   method: z.literal("item/completed"),
   params: z.object({

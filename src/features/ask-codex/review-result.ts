@@ -54,20 +54,30 @@ type CodexReviewFinding = z.infer<
   typeof codexReviewResultSchema
 >["findings"][number];
 
-export function parseReviewResult(text: string): ReviewResult {
+export function parseReviewResult(
+  text: string,
+  provider = "Codex",
+): ReviewResult {
   let value: unknown;
 
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error("Codex returned a final answer that is not valid JSON.");
+    throw new Error(`${provider} returned a final answer that is not valid JSON.`);
   }
 
+  return parseReviewResultValue(value, provider);
+}
+
+export function parseReviewResultValue(
+  value: unknown,
+  provider: string,
+): ReviewResult {
   const result = codexReviewResultSchema.safeParse(value);
 
   if (!result.success) {
     throw new Error(
-      `Codex returned an invalid review result: ${z.prettifyError(result.error)}`,
+      `${provider} returned an invalid review result: ${z.prettifyError(result.error)}`,
     );
   }
 

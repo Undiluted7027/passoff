@@ -1,6 +1,7 @@
 /** Reads newline-delimited JSON without assuming process chunks align to lines. */
 export async function* readJsonLines(
   chunks: AsyncIterable<Uint8Array | string>,
+  source = "Codex app-server",
 ): AsyncGenerator<unknown> {
   const decoder = new TextDecoder();
   let pending = "";
@@ -14,7 +15,7 @@ export async function* readJsonLines(
 
     for (const line of lines) {
       if (line.trim() !== "") {
-        yield parseLine(line);
+        yield parseLine(line, source);
       }
     }
   }
@@ -22,14 +23,14 @@ export async function* readJsonLines(
   pending += decoder.decode();
 
   if (pending.trim() !== "") {
-    yield parseLine(pending);
+    yield parseLine(pending, source);
   }
 }
 
-function parseLine(line: string): unknown {
+function parseLine(line: string, source: string): unknown {
   try {
     return JSON.parse(line);
   } catch {
-    throw new Error("Codex app-server wrote malformed JSON to stdout.");
+    throw new Error(`${source} wrote malformed JSON to stdout.`);
   }
 }

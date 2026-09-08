@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"claude-session-2","permissionMode":"dontAsk"}
+{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","session_id":"claude-session-2","result":"I could not run the command.","permission_denials":[{"tool_name":"Bash","tool_use_id":"tool-1","tool_input":{"command":"bun test"}}]}

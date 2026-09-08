@@ -132,3 +132,56 @@ test("continues after a retryable Codex error", async () => {
   expect(result.status).toBe("changes_requested");
   expect(progress.join("")).toContain("will retry");
 });
+
+test("answers the registered dynamic tool and continues the Codex turn", async () => {
+  const messages = await loadFixture("completed-review.jsonl");
+  const toolRequest = rpcMessageSchema.parse({
+    id: 42,
+    method: "item/tool/call",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "ask_claude",
+      arguments: { task: "Review this.", session: "second-opinion" },
+    },
+  });
+  const responses: unknown[] = [];
+
+  const result = await collectReviewResult(
+    readInOrder([toolRequest, ...messages]),
+    undefined,
+    undefined,
+    {
+      tool: {
+        name: "ask_claude",
+        description: "Ask Claude.",
+        inputSchema: {},
+        async execute(argumentsValue) {
+          expect(argumentsValue).toEqual({
+            task: "Review this.",
+            session: "second-opinion",
+          });
+          return '{"status":"approved"}';
+        },
+      },
+      async respond(id, response) {
+        responses.push({ id, response });
+      },
+    },
+  );
+
+  expect(responses).toEqual([
+    {
+      id: 42,
+      response: {
+        contentItems: [
+          { type: "inputText", text: '{"status":"approved"}' },
+        ],
+        success: true,
+      },
+    },
+  ]);
+  expect(result.status).toBe("changes_requested");
+});

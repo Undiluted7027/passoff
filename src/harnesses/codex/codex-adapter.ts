@@ -15,6 +15,7 @@ import {
 import { JsonRpcConnection } from "./json-rpc-connection.ts";
 import {
   codexLifecycleMessageSchema,
+  dynamicToolCallSchema,
   modelListResponseSchema,
   threadOpenResponseSchema,
   turnStartResponseSchema,
@@ -34,6 +35,14 @@ export type CodexReviewInput = {
   onApprovalRequired?: (method: string) => Promise<void>;
   onProgress: (text: string) => void;
   signal?: AbortSignal;
+  dynamicTool?: CodexDynamicTool;
+};
+
+export type CodexDynamicTool = {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  execute(argumentsValue: unknown): Promise<string>;
 };
 
 const initializeResponseSchema = z.object({ userAgent: z.string() });
@@ -60,7 +69,9 @@ export async function runCodexReview(
       "initialize",
       {
         clientInfo: { name: "passoff", title: "Passoff", version: "0.0.0" },
-        capabilities: null,
+        capabilities: input.dynamicTool
+          ? { experimentalApi: true, requestAttestation: false }
+          : null,
       },
       initializeResponseSchema,
     );
@@ -101,6 +112,12 @@ export async function runCodexReview(
       () => connection.nextServerMessage(),
       input.onProgress,
       input.onApprovalRequired,
+      input.dynamicTool
+        ? {
+            tool: input.dynamicTool,
+            respond: (id, response) => connection.respond(id, response),
+          }
+        : undefined,
     );
 
     if (result.status === "blocked") {
@@ -155,11 +172,29 @@ async function openThread(
       throw new Error("Codex app-server did not report a default model.");
     }
 
-    const response = await connection.request(
-      "thread/start",
-      restrictions,
-      threadOpenResponseSchema,
-    );
+    let response: z.infer<typeof threadOpenResponseSchema>;
+
+    try {
+      response = await connection.request(
+        "thread/start",
+        {
+          ...restrictions,
+          ...(input.dynamicTool
+            ? { dynamicTools: [dynamicToolSpec(input.dynamicTool)] }
+            : {}),
+        },
+        threadOpenResponseSchema,
+      );
+    } catch (error) {
+      if (!input.dynamicTool) {
+        throw error;
+      }
+
+      const detail = error instanceof Error ? error.message : "unknown error";
+      throw new Error(
+        `Codex could not register the experimental ${input.dynamicTool.name} tool: ${detail}`,
+      );
+    }
 
     return { id: response.thread.id, model: response.model };
   }
@@ -182,6 +217,15 @@ async function openThread(
       { cause: error },
     );
   }
+}
+
+function dynamicToolSpec(tool: CodexDynamicTool) {
+  return {
+    type: "function",
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  } as const;
 }
 
 type AvailableModel = z.infer<typeof modelListResponseSchema>["data"][number];
@@ -246,6 +290,16 @@ export async function collectReviewResult(
   nextMessage: () => Promise<RpcMessage>,
   onProgress: (text: string) => void = () => undefined,
   onApprovalRequired: (method: string) => Promise<void> = async () => undefined,
+  dynamicTool?: {
+    tool: CodexDynamicTool;
+    respond(
+      id: string | number,
+      response: {
+        contentItems: Array<{ type: "inputText"; text: string }>;
+        success: boolean;
+      },
+    ): Promise<void>;
+  },
 ): Promise<ReviewResult> {
   // Structured turns may emit commentary agent messages. Only final_answer is
   // the review payload, and it is not trusted until the turn itself completes.
@@ -256,6 +310,32 @@ export async function collectReviewResult(
     const message = await nextMessage();
 
     if (message.id !== undefined) {
+      const toolCall = dynamicToolCallSchema.safeParse(message);
+
+      if (toolCall.success && dynamicTool?.tool.name === toolCall.data.params.tool) {
+        let text: string;
+        let success = true;
+
+        try {
+          text = await dynamicTool.tool.execute(toolCall.data.params.arguments);
+        } catch (error) {
+          success = false;
+          text = error instanceof Error ? error.message : "Claude handoff failed.";
+        }
+
+        try {
+          await dynamicTool.respond(toolCall.data.id, {
+            contentItems: [{ type: "inputText", text }],
+            success,
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "unknown error";
+          throw new Error(`Codex dynamic-tool protocol failed: ${detail}`);
+        }
+
+        continue;
+      }
+
       await onApprovalRequired(message.method);
 
       return {

@@ -76,6 +76,22 @@ passoff ask codex \
   "Verify the fixes"
 ```
 
+Codex sessions started by Passoff also receive one host-backed `ask_claude`
+tool. The tool accepts a bounded review task and a Claude session name:
+
+```json
+{
+  "task": "Review the run-history changes for lifecycle bugs.",
+  "session": "run-history-review"
+}
+```
+
+Passoff starts Claude Code outside Codex's sandbox, under Claude's restricted
+reviewer flags. Reusing the tool's session name resumes the same native Claude
+session. Start a new Codex session when first using this feature because Codex
+registers dynamic tools when its native thread is created. The outer `--timeout`
+and process signals also stop an active Claude review.
+
 Progress goes to stderr. The final machine-readable result goes to stdout so scripts and parent agents can consume it without parsing progress logs.
 
 `--timeout` sets a deadline in seconds. Pressing Ctrl-C, receiving `SIGTERM`, or reaching the deadline interrupts the active native turn and records the run as interrupted before Passoff exits.
@@ -172,7 +188,7 @@ A Codex agent in the read-only sandbox cannot reliably start Claude Code as a sh
 
 ## Claude Code integration
 
-Start with the installed Claude Code CLI in print mode with structured streaming. Capture its session ID and pass that ID to `--resume` for follow-ups.
+Start with the installed Claude Code CLI in print mode with structured streaming. Capture its session ID and pass that ID to `--resume` for follow-ups. The `ask_claude` dynamic tool requires callers to provide a stable session name; Passoff maps that name to Claude's opaque ID outside the repository.
 
 Use `--restricted --strict-mcp-config` and an explicit tool list for reviewer runs. Restrictions must be supplied again on resume; a resumed session can otherwise restore tools from its persisted configuration.
 

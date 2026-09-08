@@ -21,6 +21,7 @@ export type CodexReviewInput = {
   model?: string;
   nativeSessionId?: string;
   onNativeSessionOpened: (nativeSessionId: string) => Promise<void>;
+  onProviderMessage?: (message: unknown) => void;
   onProgress: (text: string) => void;
 };
 
@@ -32,6 +33,7 @@ export async function runCodexReview(
 ): Promise<ReviewResult> {
   const connection = new JsonRpcConnection(
     createCodexProcessTransport(input.cwd, input.onProgress),
+    input.onProviderMessage,
   );
 
   try {

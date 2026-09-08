@@ -68,7 +68,11 @@ export class JsonRpcConnection {
   readonly #reader: Promise<void>;
   #failure: Error | undefined;
 
-  constructor(private readonly transport: RpcTransport) {
+  constructor(
+    private readonly transport: RpcTransport,
+    private readonly onProviderMessage: (message: unknown) => void = () =>
+      undefined,
+  ) {
     this.#reader = this.readMessages();
   }
 
@@ -113,6 +117,7 @@ export class JsonRpcConnection {
   private async readMessages(): Promise<void> {
     try {
       for await (const value of this.transport.messages) {
+        this.onProviderMessage(value);
         const response = rpcResponseSchema.safeParse(value);
 
         if (response.success && !("method" in response.data)) {

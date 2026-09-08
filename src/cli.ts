@@ -14,6 +14,10 @@ const main = defineCommand({
       import("./features/ask-codex/command.ts").then(
         ({ askCommand }) => askCommand,
       ),
+    inspect: () =>
+      import("./features/inspect-run/command.ts").then(
+        ({ inspectCommand }) => inspectCommand,
+      ),
   },
 });
 

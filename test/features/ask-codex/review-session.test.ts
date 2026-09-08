@@ -10,6 +10,7 @@ import {
   type ReviewSessionInput,
 } from "../../../src/features/ask-codex/review-session.ts";
 import { SessionStore } from "../../../src/features/ask-codex/session-store.ts";
+import { rejectedError } from "../../support/rejected-error.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -125,7 +126,9 @@ test("failures preserve the last native thread ID that opened", async () => {
     },
   });
 
-  expect(failedResume).rejects.toThrow("Native session missing");
+  expect((await rejectedError(failedResume)).message).toContain(
+    "Native session missing",
+  );
   expect(await store.get(key)).toBe("working-thread");
 
   const firstTurnKey = { harness: "codex", name: "first-turn" };
@@ -140,7 +143,9 @@ test("failures preserve the last native thread ID that opened", async () => {
     },
   );
 
-  expect(failedFirstTurn).rejects.toThrow("Turn failed after opening");
+  expect((await rejectedError(failedFirstTurn)).message).toContain(
+    "Turn failed after opening",
+  );
   expect(await store.get(firstTurnKey)).toBe("new-thread");
 });
 

@@ -61,6 +61,7 @@ For example:
 
 ```bash
 passoff ask codex \
+  --source claude \
   --role reviewer \
   --session auth-review \
   "Review the current diff for authorization bugs"
@@ -76,7 +77,14 @@ passoff ask codex \
 
 Progress goes to stderr. The final machine-readable result goes to stdout so scripts and parent agents can consume it without parsing progress logs.
 
-Add `passoff list`, `passoff inspect`, or `passoff interrupt` when the demo needs them.
+Inspect the latest run in a named Codex session:
+
+```bash
+passoff inspect --session auth-review
+passoff inspect --session auth-review --json
+```
+
+The default output is short and readable. `--json` returns the complete stored record. Add `passoff list` or `passoff interrupt` when the demo needs them.
 
 ## Handoff format
 
@@ -188,14 +196,25 @@ Key each project by a stable hash of its canonical repository path:
     └── <repository-key>/
         ├── sessions/
         │   └── <session-key>.json
+        ├── run-index/
+        │   └── <session-key>.json
         └── runs/
             └── <run-id>/
                 ├── handoff.json
                 ├── events.ndjson
-                └── result.json
+                ├── result.json
+                └── provider.json (only with --debug-capture)
 ```
 
 Each session key is a stable hash of the harness ID and user-supplied session name. Keeping one session per file lets concurrent updates to different names use atomic replacement without a shared read-modify-write lock.
+
+The run index points each named session to its latest run. Passoff writes the result first and marks the handoff terminal last, so `inspect` cannot mistake a partial write for a completed run.
+
+Callers may identify themselves with `--source claude` or `--source codex`. Omitted sources are recorded as unknown.
+
+Provider messages are not stored unless `--debug-capture` is set. Debug capture removes known credential and environment fields, limits each message, and stops retaining messages when the capture reaches its count or byte limit.
+
+Until [issue #4](https://github.com/Undiluted7027/passoff/issues/4) adds cancellation handling, killing Passoff can leave the latest run marked `running`. The record format already supports interrupted runs; issue #4 will write that terminal state before the process exits.
 
 The POC assumes one active run per named session. [Issue #6](https://github.com/Undiluted7027/passoff/issues/6) tracks how Passoff prevents simultaneous use of the same session.
 

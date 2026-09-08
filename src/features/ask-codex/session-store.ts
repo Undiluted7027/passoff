@@ -1,8 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+
+import {
+  hasErrorCode,
+  repositoryStateDirectory,
+  sessionStateKey,
+  writeJsonAtomically,
+} from "../local-state/repository-state.ts";
 
 const sessionFileSchema = z.strictObject({
   version: z.literal(1),
@@ -23,16 +28,13 @@ export class SessionStore {
 
   static async forRepository(
     repositoryRoot: string,
-    stateDirectory = passoffStateDirectory(),
+    stateDirectory?: string,
   ): Promise<SessionStore> {
-    // The same checkout may be reached through a symlink. Canonicalizing first
-    // keeps those paths attached to one session directory.
-    const canonicalRoot = await realpath(repositoryRoot);
-    const repositoryKey = hash(canonicalRoot);
-
-    return new SessionStore(
-      join(stateDirectory, "projects", repositoryKey, "sessions"),
+    const projectDirectory = await repositoryStateDirectory(
+      repositoryRoot,
+      stateDirectory,
     );
+    return new SessionStore(join(projectDirectory, "sessions"));
   }
 
   async get(key: SessionKey): Promise<string | undefined> {
@@ -64,54 +66,14 @@ export class SessionStore {
   async set(key: SessionKey, nativeSessionId: string): Promise<void> {
     const file: SessionFile = { version: 1, ...key, nativeSessionId };
     const filePath = this.filePath(key);
-    const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-
-    try {
-      await writeFile(temporaryPath, `${JSON.stringify(file, null, 2)}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      // Each key owns one file. Atomic replacement cannot drop other sessions.
-      await rename(temporaryPath, filePath);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    // Each key owns one file. Atomic replacement cannot drop other sessions.
+    await writeJsonAtomically(filePath, file);
   }
 
   private filePath(key: SessionKey): string {
     // Names are kept inside the validated JSON record. Hashing keeps arbitrary
     // user input out of filesystem paths and includes the harness in the key.
-    return join(this.directory, `${hash(JSON.stringify(key))}.json`);
+    return join(this.directory, `${sessionStateKey(key)}.json`);
   }
-}
-
-function passoffStateDirectory(): string {
-  if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Application Support", "passoff");
-  }
-
-  if (process.platform === "win32") {
-    return join(
-      process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
-      "passoff",
-    );
-  }
-
-  return join(
-    process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
-    "passoff",
-  );
-}
-
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function hasErrorCode(
-  error: unknown,
-  code: string,
-): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error && error.code === code;
 }

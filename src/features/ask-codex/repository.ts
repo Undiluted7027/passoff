@@ -29,11 +29,7 @@ export async function resolveReviewRepository(
   cwd: string,
   base: string,
 ): Promise<ReviewRepository> {
-  const root = await runGit(
-    cwd,
-    ["rev-parse", "--show-toplevel"],
-    "The current directory is not inside a Git repository.",
-  );
+  const root = await resolveRepositoryRoot(cwd);
   const baseRevision = await runGit(
     root,
     ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`],
@@ -41,4 +37,12 @@ export async function resolveReviewRepository(
   );
 
   return { root, baseRevision };
+}
+
+export async function resolveRepositoryRoot(cwd: string): Promise<string> {
+  return runGit(
+    cwd,
+    ["rev-parse", "--show-toplevel"],
+    "The current directory is not inside a Git repository.",
+  );
 }

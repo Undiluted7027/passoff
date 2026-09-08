@@ -5,6 +5,7 @@ import {
   JsonRpcConnection,
   type RpcTransport,
 } from "../../../src/harnesses/codex/json-rpc-connection.ts";
+import { rejectedError } from "../../support/rejected-error.ts";
 
 test("rejects requests made after the app-server reader stops", async () => {
   const closedTransport: RpcTransport = {
@@ -22,7 +23,13 @@ test("rejects requests made after the app-server reader stops", async () => {
   // the race that previously left a request promise unresolved forever.
   await Promise.resolve();
 
-  expect(
-    connection.request("model/list", {}, z.object({ data: z.array(z.never()) })),
-  ).rejects.toThrow("closed before the review completed");
+  const request = connection.request(
+    "model/list",
+    {},
+    z.object({ data: z.array(z.never()) }),
+  );
+
+  expect((await rejectedError(request)).message).toContain(
+    "closed before the review completed",
+  );
 });

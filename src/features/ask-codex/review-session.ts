@@ -1,12 +1,10 @@
-import {
-  type CodexReviewInput,
-} from "../../harnesses/codex/codex-adapter.ts";
+import type { CodexReviewInput } from "../../harnesses/codex/codex-adapter.ts";
 import type { ReviewResult } from "./review-result.ts";
 import type { SessionStore } from "./session-store.ts";
 
 export type ReviewSessionInput = Omit<
   CodexReviewInput,
-  "nativeSessionId" | "onNativeSessionOpened"
+  "nativeSessionId" | "onNativeSessionOpened" | "onProviderMessage"
 > & {
   sessionName?: string;
 };
@@ -14,6 +12,8 @@ export type ReviewSessionInput = Omit<
 type ReviewSessionDependencies = {
   sessionStore: Pick<SessionStore, "get" | "set">;
   runReview: (input: CodexReviewInput) => Promise<ReviewResult>;
+  onSessionStarted?: (nativeSessionId: string) => Promise<void>;
+  onProviderMessage?: (message: unknown) => void;
 };
 
 /** Resolves a friendly name and saves the native thread as soon as it opens. */
@@ -33,12 +33,15 @@ export async function runReviewSession(
   return dependencies.runReview({
     ...reviewInput,
     nativeSessionId,
+    onProviderMessage: dependencies.onProviderMessage,
     async onNativeSessionOpened(openedSessionId) {
       // Save before the turn starts. A malformed result or failed turn should
       // not discard a native thread that Codex can still resume.
       if (sessionKey) {
         await dependencies.sessionStore.set(sessionKey, openedSessionId);
       }
+
+      await dependencies.onSessionStarted?.(openedSessionId);
     },
   });
 }

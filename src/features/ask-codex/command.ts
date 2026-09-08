@@ -4,8 +4,9 @@ import { defineCommand } from "citty";
 import { runCodexReview } from "../../harnesses/codex/codex-adapter.ts";
 import { buildReviewPrompt, reviewOutputSchema } from "./review-prompt.ts";
 import { resolveReviewRepository } from "./repository.ts";
-import { runReviewSession } from "./review-session.ts";
 import { SessionStore } from "./session-store.ts";
+import { runRecordedReview } from "../run-history/run-recorded-review.ts";
+import { RunStore } from "../run-history/run-store.ts";
 
 export const askCommand = defineCommand({
   meta: {
@@ -38,9 +39,19 @@ export const askCommand = defineCommand({
       type: "string",
       description: "Codex model; defaults to the app-server catalog default",
     },
+    source: {
+      type: "enum",
+      description: "Harness making the request",
+      options: ["claude", "codex"],
+    },
     session: {
       type: "string",
       description: "Name used to resume the same Codex thread",
+    },
+    "debug-capture": {
+      type: "boolean",
+      description: "Save sanitized Codex protocol messages with the run",
+      default: false,
     },
   },
   async run({ args, rawArgs }) {
@@ -63,20 +74,27 @@ export const askCommand = defineCommand({
       }
 
       const sessionStore = await SessionStore.forRepository(repository.root);
-      const result = await runReviewSession(
+      const runStore = await RunStore.forRepository(repository.root);
+      const result = await runRecordedReview(
         {
-          cwd: repository.root,
-          prompt: buildReviewPrompt({
-            task: args.task,
-            repository: repository.root,
-            baseRevision: repository.baseRevision,
-          }),
-          outputSchema: reviewOutputSchema,
-          model: args.model,
-          sessionName,
-          onProgress: (text) => process.stderr.write(text),
+          task: args.task,
+          baseRevision: repository.baseRevision,
+          sourceHarness: args.source,
+          debugCapture: args["debug-capture"],
+          review: {
+            cwd: repository.root,
+            prompt: buildReviewPrompt({
+              task: args.task,
+              repository: repository.root,
+              baseRevision: repository.baseRevision,
+            }),
+            outputSchema: reviewOutputSchema,
+            model: args.model,
+            sessionName,
+            onProgress: (text) => process.stderr.write(text),
+          },
         },
-        { sessionStore, runReview: runCodexReview },
+        { sessionStore, runStore, runReview: runCodexReview },
       );
 
       process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -99,7 +117,9 @@ function assertSupportedArguments(rawArgs: string[]): void {
       base: { type: "string" },
       role: { type: "string" },
       model: { type: "string" },
+      source: { type: "string" },
       session: { type: "string" },
+      "debug-capture": { type: "boolean" },
     },
   });
 

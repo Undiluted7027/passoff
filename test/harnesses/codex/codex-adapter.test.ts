@@ -5,6 +5,7 @@ import {
   rpcMessageSchema,
   type RpcMessage,
 } from "../../../src/harnesses/codex/protocol.ts";
+import { rejectedError } from "../../support/rejected-error.ts";
 
 // Fixtures are sanitized app-server messages. Loading them from disk keeps the
 // ordinary test suite deterministic and prevents accidental model usage.
@@ -47,7 +48,9 @@ test("uses the final answer and ignores earlier commentary", async () => {
 test("rejects malformed review output after a successful native turn", async () => {
   const messages = await loadFixture("malformed-review.jsonl");
 
-  expect(collectReviewResult(readInOrder(messages))).rejects.toThrow(
+  expect(
+    (await rejectedError(collectReviewResult(readInOrder(messages)))).message,
+  ).toContain(
     "Codex returned an invalid review result",
   );
 });
@@ -59,7 +62,9 @@ test("refuses requests for host approval", async () => {
     params: { command: "git status" },
   });
 
-  expect(collectReviewResult(async () => request)).rejects.toThrow(
+  expect(
+    (await rejectedError(collectReviewResult(async () => request))).message,
+  ).toContain(
     "read-only reviews cannot approve requests",
   );
 });

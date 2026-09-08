@@ -8,25 +8,27 @@ import { JsonRpcConnection } from "./json-rpc-connection.ts";
 import {
   codexLifecycleMessageSchema,
   modelListResponseSchema,
-  threadStartResponseSchema,
+  threadOpenResponseSchema,
   turnStartResponseSchema,
   type RpcMessage,
 } from "./protocol.ts";
 import { createCodexProcessTransport } from "./process-transport.ts";
 
-type StartCodexReviewInput = {
+export type CodexReviewInput = {
   cwd: string;
   prompt: string;
   outputSchema: unknown;
   model?: string;
+  nativeSessionId?: string;
+  onNativeSessionOpened: (nativeSessionId: string) => Promise<void>;
   onProgress: (text: string) => void;
 };
 
 const initializeResponseSchema = z.object({ userAgent: z.string() });
 
-/** Starts one new, read-only Codex review and returns its validated result. */
-export async function startCodexReview(
-  input: StartCodexReviewInput,
+/** Starts or resumes one read-only Codex review in a fresh app-server process. */
+export async function runCodexReview(
+  input: CodexReviewInput,
 ): Promise<ReviewResult> {
   const connection = new JsonRpcConnection(
     createCodexProcessTransport(input.cwd, input.onProgress),
@@ -43,24 +45,26 @@ export async function startCodexReview(
     );
     await connection.notify("initialized", {});
 
-    const model = await selectModel(connection, input.model);
-    input.onProgress(`Starting Codex review with ${model}.\n`);
+    const models = await loadAvailableModels(connection);
+    const modelOverride = modelForThreadOpen(models, input);
+    const openedThread = await openThread(connection, input, modelOverride);
+    const model = openedThread.model;
 
-    const { thread } = await connection.request(
-      "thread/start",
-      {
-        cwd: input.cwd,
-        model,
-        approvalPolicy: "never",
-        sandbox: "read-only",
-      },
-      threadStartResponseSchema,
+    if (!models.some((candidate) => candidate.model === model)) {
+      throw new Error(`Codex session uses unavailable model ${model}.`);
+    }
+
+    // Persisting here keeps the thread resumable even if the turn later fails.
+    await input.onNativeSessionOpened(openedThread.id);
+
+    input.onProgress(
+      `${input.nativeSessionId ? "Resumed" : "Starting"} Codex review with ${model}.\n`,
     );
 
     await connection.request(
       "turn/start",
       {
-        threadId: thread.id,
+        threadId: openedThread.id,
         input: [{ type: "text", text: input.prompt, text_elements: [] }],
         cwd: input.cwd,
         approvalPolicy: "never",
@@ -80,12 +84,60 @@ export async function startCodexReview(
   }
 }
 
-async function selectModel(
+async function openThread(
   connection: JsonRpcConnection,
-  requestedModel: string | undefined,
-): Promise<string> {
+  input: CodexReviewInput,
+  model: string | undefined,
+): Promise<{ id: string; model: string }> {
+  const restrictions = {
+    cwd: input.cwd,
+    approvalPolicy: "never",
+    sandbox: "read-only",
+    ...(model ? { model } : {}),
+  } as const;
+
+  if (!input.nativeSessionId) {
+    if (!model) {
+      throw new Error("Codex app-server did not report a default model.");
+    }
+
+    const response = await connection.request(
+      "thread/start",
+      restrictions,
+      threadOpenResponseSchema,
+    );
+
+    return { id: response.thread.id, model: response.model };
+  }
+
+  try {
+    const response = await connection.request(
+      "thread/resume",
+      {
+        threadId: input.nativeSessionId,
+        ...restrictions,
+        excludeTurns: true,
+      },
+      threadOpenResponseSchema,
+    );
+
+    return { id: response.thread.id, model: response.model };
+  } catch (error) {
+    throw new Error(
+      "The stored Codex session could not be resumed. It may no longer exist.",
+      { cause: error },
+    );
+  }
+}
+
+type AvailableModel = z.infer<typeof modelListResponseSchema>["data"][number];
+
+async function loadAvailableModels(
+  connection: JsonRpcConnection,
+): Promise<AvailableModel[]> {
   // The catalog check catches stale CLIs and unavailable configured models
   // before we create a thread that cannot run.
+  const models: AvailableModel[] = [];
   let cursor: string | null = null;
 
   do {
@@ -94,19 +146,40 @@ async function selectModel(
       { cursor, limit: 100, includeHidden: true },
       modelListResponseSchema,
     );
-    const match = requestedModel
-      ? page.data.find(
-          (candidate) =>
-            candidate.id === requestedModel || candidate.model === requestedModel,
-        )
-      : page.data.find((candidate) => candidate.isDefault);
-
-    if (match) {
-      return match.model;
-    }
-
+    models.push(...page.data);
     cursor = page.nextCursor;
   } while (cursor !== null);
+
+  return models;
+}
+
+function modelForThreadOpen(
+  models: AvailableModel[],
+  input: Pick<CodexReviewInput, "model" | "nativeSessionId">,
+): string | undefined {
+  if (!input.nativeSessionId) {
+    return selectModel(models, input.model);
+  }
+
+  // Omitting model on resume preserves the model stored by Codex. An explicit
+  // --model still acts as an intentional override after catalog validation.
+  return input.model ? selectModel(models, input.model) : undefined;
+}
+
+function selectModel(
+  models: AvailableModel[],
+  requestedModel: string | undefined,
+): string {
+  const match = requestedModel
+    ? models.find(
+        (candidate) =>
+          candidate.id === requestedModel || candidate.model === requestedModel,
+      )
+    : models.find((candidate) => candidate.isDefault);
+
+  if (match) {
+    return match.model;
+  }
 
   if (requestedModel) {
     throw new Error(`Codex model ${requestedModel} is not available.`);

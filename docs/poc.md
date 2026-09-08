@@ -186,13 +186,18 @@ Key each project by a stable hash of its canonical repository path:
 <state-dir>/
 └── projects/
     └── <repository-key>/
-        ├── sessions.json
+        ├── sessions/
+        │   └── <session-key>.json
         └── runs/
             └── <run-id>/
                 ├── handoff.json
                 ├── events.ndjson
                 └── result.json
 ```
+
+Each session key is a stable hash of the harness ID and user-supplied session name. Keeping one session per file lets concurrent updates to different names use atomic replacement without a shared read-modify-write lock.
+
+The POC assumes one active run per named session. [Issue #6](https://github.com/Undiluted7027/passoff/issues/6) tracks how Passoff prevents simultaneous use of the same session.
 
 Write files atomically when an interrupted write could corrupt the run. Records may contain native session IDs, task text, and model output. Do not intentionally record provider credentials or environment-variable values. Redact known sensitive fields before persisting provider payloads, and treat the remaining run record as sensitive because user-supplied tasks and model output can contain secrets.
 

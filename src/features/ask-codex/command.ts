@@ -1,9 +1,11 @@
 import { parseArgs } from "node:util";
 import { defineCommand } from "citty";
 
-import { startCodexReview } from "../../harnesses/codex/codex-adapter.ts";
+import { runCodexReview } from "../../harnesses/codex/codex-adapter.ts";
 import { buildReviewPrompt, reviewOutputSchema } from "./review-prompt.ts";
 import { resolveReviewRepository } from "./repository.ts";
+import { runReviewSession } from "./review-session.ts";
+import { SessionStore } from "./session-store.ts";
 
 export const askCommand = defineCommand({
   meta: {
@@ -36,6 +38,10 @@ export const askCommand = defineCommand({
       type: "string",
       description: "Codex model; defaults to the app-server catalog default",
     },
+    session: {
+      type: "string",
+      description: "Name used to resume the same Codex thread",
+    },
   },
   async run({ args, rawArgs }) {
     try {
@@ -50,17 +56,28 @@ export const askCommand = defineCommand({
       }
 
       const repository = await resolveReviewRepository(process.cwd(), args.base);
-      const result = await startCodexReview({
-        cwd: repository.root,
-        prompt: buildReviewPrompt({
-          task: args.task,
-          repository: repository.root,
-          baseRevision: repository.baseRevision,
-        }),
-        outputSchema: reviewOutputSchema,
-        model: args.model,
-        onProgress: (text) => process.stderr.write(text),
-      });
+      const sessionName = args.session?.trim();
+
+      if (args.session !== undefined && sessionName === "") {
+        throw new Error("The session name cannot be empty.");
+      }
+
+      const sessionStore = await SessionStore.forRepository(repository.root);
+      const result = await runReviewSession(
+        {
+          cwd: repository.root,
+          prompt: buildReviewPrompt({
+            task: args.task,
+            repository: repository.root,
+            baseRevision: repository.baseRevision,
+          }),
+          outputSchema: reviewOutputSchema,
+          model: args.model,
+          sessionName,
+          onProgress: (text) => process.stderr.write(text),
+        },
+        { sessionStore, runReview: runCodexReview },
+      );
 
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } catch (error) {
@@ -82,6 +99,7 @@ function assertSupportedArguments(rawArgs: string[]): void {
       base: { type: "string" },
       role: { type: "string" },
       model: { type: "string" },
+      session: { type: "string" },
     },
   });
 

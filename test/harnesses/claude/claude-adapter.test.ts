@@ -5,7 +5,9 @@ import { join } from "node:path";
 import {
   buildClaudeArguments,
   collectClaudeReview,
+  runClaudeReview,
 } from "../../../src/harnesses/claude/claude-adapter.ts";
+import { HandoffInterruptedError } from "../../../src/harnesses/harness-interruption.ts";
 import { readJsonLines } from "../../../src/harnesses/codex/json-lines.ts";
 
 const fixtureDirectory = join(import.meta.dir, "../../fixtures/claude");
@@ -80,18 +82,77 @@ test("permission denials block an otherwise successful Claude result", async () 
 test("a completed Claude stream returns its structured review", async () => {
   const messages = await fixture("completed-review.jsonl");
   const sessions: string[] = [];
+  const progress: string[] = [];
 
   const result = await collectClaudeReview(messages, {
     onNativeSessionOpened: async (id) => {
       sessions.push(id);
     },
+    onProgress: (text) => progress.push(text),
   });
 
   expect(sessions).toEqual(["claude-session-1"]);
+  expect(progress).toEqual([
+    "Claude is reviewing.\n",
+    "Claude is using Read.\n",
+  ]);
   expect(result).toEqual({
-    status: "approved",
-    summary: "No findings.",
+    status: "changes_requested",
+    summary: "One finding.",
     checks: [],
-    findings: [],
+    findings: [{ severity: "low", problem: "Clarify the command." }],
   });
+});
+
+test("an interrupted Claude review stops and closes its process", async () => {
+  const controller = new AbortController();
+  const streamStopped = Promise.withResolvers<void>();
+  const sessionOpened = Promise.withResolvers<void>();
+  let interruptCalls = 0;
+  let closeCalls = 0;
+
+  const review = runClaudeReview(
+    {
+      cwd: "/repo",
+      prompt: "Review the change.",
+      outputSchema: {},
+      signal: controller.signal,
+      onProgress: () => undefined,
+      async onNativeSessionOpened() {
+        sessionOpened.resolve();
+      },
+    },
+    {
+      startProcess: () => ({
+        messages: (async function* () {
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: "claude-session-3",
+          };
+          await streamStopped.promise;
+        })(),
+        interrupt() {
+          interruptCalls += 1;
+          streamStopped.resolve();
+        },
+        async close() {
+          closeCalls += 1;
+          streamStopped.resolve();
+        },
+      }),
+    },
+  );
+
+  await sessionOpened.promise;
+  controller.abort(
+    new HandoffInterruptedError("Review timed out.", "deadline_exceeded", 1),
+  );
+
+  await expect(review).rejects.toMatchObject({
+    message: "Review timed out.",
+    code: "deadline_exceeded",
+  });
+  expect(interruptCalls).toBe(1);
+  expect(closeCalls).toBe(1);
 });

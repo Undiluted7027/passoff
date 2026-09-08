@@ -115,7 +115,9 @@ function claudeCompatibleSchema(schema: unknown): unknown {
 type ClaudeReviewCallbacks = Pick<
   ClaudeReviewInput,
   "onNativeSessionOpened" | "onApprovalRequired"
->;
+> & {
+  onProgress?: ClaudeReviewInput["onProgress"];
+};
 
 /** Reduces Claude's stream to the session ID, denials, and terminal result. */
 export async function collectClaudeReview(
@@ -123,6 +125,17 @@ export async function collectClaudeReview(
   callbacks: ClaudeReviewCallbacks,
 ): Promise<ReviewResult> {
   let openedSession = false;
+  let reportedReviewing = false;
+  const reportedTools = new Set<string>();
+
+  const openSession = async (sessionId: string) => {
+    if (openedSession) {
+      return;
+    }
+
+    openedSession = true;
+    await callbacks.onNativeSessionOpened(sessionId);
+  };
 
   for await (const message of messages) {
     const parsed = claudeStreamMessageSchema.safeParse(message);
@@ -132,16 +145,30 @@ export async function collectClaudeReview(
     }
 
     if (parsed.data.type === "system") {
-      if (!openedSession) {
-        openedSession = true;
-        await callbacks.onNativeSessionOpened(parsed.data.session_id);
-      }
+      await openSession(parsed.data.session_id);
       continue;
     }
 
-    if (!openedSession) {
-      openedSession = true;
-      await callbacks.onNativeSessionOpened(parsed.data.session_id);
+    await openSession(parsed.data.session_id);
+
+    if (parsed.data.type === "assistant") {
+      if (!reportedReviewing) {
+        reportedReviewing = true;
+        callbacks.onProgress?.("Claude is reviewing.\n");
+      }
+
+      for (const block of parsed.data.message.content) {
+        if (
+          block.type === "tool_use" &&
+          block.name !== undefined &&
+          !reportedTools.has(block.name)
+        ) {
+          reportedTools.add(block.name);
+          callbacks.onProgress?.(`Claude is using ${block.name}.\n`);
+        }
+      }
+
+      continue;
     }
 
     if (parsed.data.permission_denials.length > 0) {

@@ -4,11 +4,23 @@ const permissionDenialSchema = z.looseObject({
   tool_name: z.string().min(1),
 });
 
+const assistantContentBlockSchema = z.looseObject({
+  type: z.string(),
+  name: z.string().min(1).optional(),
+});
+
 export const claudeStreamMessageSchema = z.union([
   z.looseObject({
     type: z.literal("system"),
     subtype: z.literal("init"),
     session_id: z.string().min(1),
+  }),
+  z.looseObject({
+    type: z.literal("assistant"),
+    session_id: z.string().min(1),
+    message: z.looseObject({
+      content: z.array(assistantContentBlockSchema),
+    }),
   }),
   z.looseObject({
     type: z.literal("result"),

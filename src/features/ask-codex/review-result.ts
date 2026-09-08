@@ -50,8 +50,23 @@ export const codexReviewResultSchema = z.strictObject({
   ),
 });
 
-type CodexReviewFinding = z.infer<
-  typeof codexReviewResultSchema
+// Providers may return optional finding details as either omitted or null.
+// Parsing both forms here keeps that wire-format detail out of Passoff results.
+const returnedReviewResultSchema = z.strictObject({
+  ...reviewResultFields,
+  findings: z.array(
+    z.strictObject({
+      ...reviewFindingFields,
+      file: z.string().min(1).nullish(),
+      line: z.number().int().positive().nullish(),
+      evidence: z.string().min(1).nullish(),
+      suggestedFix: z.string().min(1).nullish(),
+    }),
+  ),
+});
+
+type ReturnedReviewFinding = z.infer<
+  typeof returnedReviewResultSchema
 >["findings"][number];
 
 export function parseReviewResult(
@@ -73,7 +88,7 @@ export function parseReviewResultValue(
   value: unknown,
   provider: string,
 ): ReviewResult {
-  const result = codexReviewResultSchema.safeParse(value);
+  const result = returnedReviewResultSchema.safeParse(value);
 
   if (!result.success) {
     throw new Error(
@@ -87,14 +102,16 @@ export function parseReviewResultValue(
   };
 }
 
-function normalizeFinding(finding: CodexReviewFinding): ReviewResult["findings"][number] {
+function normalizeFinding(
+  finding: ReturnedReviewFinding,
+): ReviewResult["findings"][number] {
   return {
     severity: finding.severity,
     problem: finding.problem,
-    ...(finding.file === null ? {} : { file: finding.file }),
-    ...(finding.line === null ? {} : { line: finding.line }),
-    ...(finding.evidence === null ? {} : { evidence: finding.evidence }),
-    ...(finding.suggestedFix === null
+    ...(finding.file == null ? {} : { file: finding.file }),
+    ...(finding.line == null ? {} : { line: finding.line }),
+    ...(finding.evidence == null ? {} : { evidence: finding.evidence }),
+    ...(finding.suggestedFix == null
       ? {}
       : { suggestedFix: finding.suggestedFix }),
   };

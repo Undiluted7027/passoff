@@ -184,6 +184,8 @@ Run the installed `codex app-server` and use its documented JSON-RPC transport. 
 
 The adapter initializes the server and checks the configured or default model against `model/list`. It starts or resumes a thread, runs a turn, translates the events Passoff uses, and interrupts active turns. Approval requests go back to the caller; the adapter never approves them. Only a completed `agentMessage` with the `final_answer` phase counts as the result because Codex can also emit commentary messages during structured runs.
 
+Codex persists dynamic-tool calls in its native thread. If the caller interrupts a handoff while a tool is active, Passoff writes a failed tool response and waits briefly for Codex to acknowledge it before interrupting the turn. When the experimental app-server protocol does not acknowledge that response, Passoff removes the outer session mapping rather than reopening a native thread with an incomplete tool exchange. The nested harness session remains resumable.
+
 A Codex agent in the read-only sandbox cannot reliably start Claude Code as a shell child because the child cannot access Claude's native login. Codex-to-Claude handoffs therefore use a narrow Passoff dynamic tool. The Passoff host receives the call and starts Claude under Claude's own restrictions. Dynamic tools currently require the app-server client's `experimentalApi` capability, so this behavior stays inside the Codex adapter and needs fixture coverage.
 
 ## Claude Code integration

@@ -114,7 +114,7 @@ test("the same session name is isolated between repositories", async () => {
   expect(stateFiles.some((path) => path.endsWith(".tmp"))).toBe(false);
 });
 
-test("failures preserve the last native thread ID that opened", async () => {
+test("failures preserve sessions unless the adapter marks one unsafe", async () => {
   const { repository, store } = await createTestRepository();
   const key = { harness: "codex", name: "review" };
   await store.set(key, "working-thread");
@@ -147,6 +147,24 @@ test("failures preserve the last native thread ID that opened", async () => {
     "Turn failed after opening",
   );
   expect(await store.get(firstTurnKey)).toBe("new-thread");
+
+  const unsafeKey = { harness: "codex", name: "unsafe-turn" };
+  const unsafeTurn = runReviewSession(
+    reviewInput(repository, "unsafe-turn"),
+    {
+      sessionStore: store,
+      async runReview(input) {
+        await input.onNativeSessionOpened("unsafe-thread");
+        await input.onNativeSessionInvalidated?.();
+        throw new Error("Tool response was not acknowledged");
+      },
+    },
+  );
+
+  expect((await rejectedError(unsafeTurn)).message).toContain(
+    "not acknowledged",
+  );
+  expect(await store.get(unsafeKey)).toBeUndefined();
 });
 
 test("concurrent saves keep every session mapping", async () => {

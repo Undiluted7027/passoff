@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -69,6 +69,15 @@ export class SessionStore {
 
     // Each key owns one file. Atomic replacement cannot drop other sessions.
     await writeJsonAtomically(filePath, file);
+  }
+
+  /** Removes a mapping only when it still points to the unsafe native session. */
+  async delete(key: SessionKey, nativeSessionId: string): Promise<void> {
+    if ((await this.get(key)) !== nativeSessionId) {
+      return;
+    }
+
+    await rm(this.filePath(key), { force: true });
   }
 
   private filePath(key: SessionKey): string {

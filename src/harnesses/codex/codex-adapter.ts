@@ -10,12 +10,14 @@ import {
 } from "../harness-interruption.ts";
 import {
   interruptWithin,
+  settleWithin,
   waitForReviewOrInterruption,
 } from "./interruptible-review.ts";
 import { JsonRpcConnection } from "./json-rpc-connection.ts";
 import {
   codexLifecycleMessageSchema,
   dynamicToolCallSchema,
+  dynamicToolCompletedSchema,
   modelListResponseSchema,
   threadOpenResponseSchema,
   turnStartResponseSchema,
@@ -31,6 +33,7 @@ export type CodexReviewInput = {
   model?: string;
   nativeSessionId?: string;
   onNativeSessionOpened: (nativeSessionId: string) => Promise<void>;
+  onNativeSessionInvalidated?: () => Promise<void>;
   onProviderMessage?: (message: unknown) => void;
   onApprovalRequired?: (method: string) => Promise<void>;
   onProgress: (text: string) => void;
@@ -47,6 +50,19 @@ export type CodexDynamicTool = {
 
 const initializeResponseSchema = z.object({ userAgent: z.string() });
 
+type DynamicToolResponse = {
+  contentItems: Array<{ type: "inputText"; text: string }>;
+  success: boolean;
+};
+
+type DynamicToolBridge = {
+  tool: CodexDynamicTool;
+  signal?: AbortSignal;
+  respond(id: string | number, response: DynamicToolResponse): Promise<void>;
+  onCallStarted?(callId: string): void;
+  onCallAcknowledged?(callId: string): void;
+};
+
 /** Starts or resumes one read-only Codex review in a fresh app-server process. */
 export async function runCodexReview(
   input: CodexReviewInput,
@@ -57,6 +73,29 @@ export async function runCodexReview(
   );
 
   let activeTurn: { threadId: string; turnId: string } | undefined;
+  let pendingDynamicToolCall:
+    | {
+        callId: string;
+        acknowledged: Promise<void>;
+        acknowledge(): void;
+      }
+    | undefined;
+  const startDynamicToolCall = (callId: string) => {
+    const acknowledgement = Promise.withResolvers<void>();
+    pendingDynamicToolCall = {
+      callId,
+      acknowledged: acknowledgement.promise,
+      acknowledge: acknowledgement.resolve,
+    };
+  };
+  const acknowledgeDynamicToolCall = (callId: string) => {
+    if (pendingDynamicToolCall?.callId !== callId) {
+      return;
+    }
+
+    pendingDynamicToolCall.acknowledge();
+    pendingDynamicToolCall = undefined;
+  };
   const interrupt = async (turn: { threadId: string; turnId: string }) => {
     await connection.request(
       "turn/interrupt",
@@ -115,7 +154,10 @@ export async function runCodexReview(
       input.dynamicTool
         ? {
             tool: input.dynamicTool,
+            signal: input.signal,
             respond: (id, response) => connection.respond(id, response),
+            onCallStarted: startDynamicToolCall,
+            onCallAcknowledged: acknowledgeDynamicToolCall,
           }
         : undefined,
     );
@@ -135,6 +177,22 @@ export async function runCodexReview(
         review: reviewPromise,
         signal: input.signal,
         activeTurn: () => activeTurn,
+        beforeInterrupt: async () => {
+          // A native thread persists dynamic-tool calls. Let Codex acknowledge
+          // the failed result before interruption so resumed threads stay valid.
+          const acknowledgement = pendingDynamicToolCall?.acknowledged;
+
+          if (acknowledgement) {
+            const acknowledged = await settleWithin(acknowledgement, 1_000);
+
+            if (!acknowledged) {
+              input.onProgress(
+                "Codex did not acknowledge the interrupted tool call; its outer session will be replaced.\n",
+              );
+              await input.onNativeSessionInvalidated?.();
+            }
+          }
+        },
         interrupt,
       });
     } catch (error) {
@@ -290,16 +348,7 @@ export async function collectReviewResult(
   nextMessage: () => Promise<RpcMessage>,
   onProgress: (text: string) => void = () => undefined,
   onApprovalRequired: (method: string) => Promise<void> = async () => undefined,
-  dynamicTool?: {
-    tool: CodexDynamicTool;
-    respond(
-      id: string | number,
-      response: {
-        contentItems: Array<{ type: "inputText"; text: string }>;
-        success: boolean;
-      },
-    ): Promise<void>;
-  },
+  dynamicTool?: DynamicToolBridge,
 ): Promise<ReviewResult> {
   // Structured turns may emit commentary agent messages. Only final_answer is
   // the review payload, and it is not trusted until the turn itself completes.
@@ -313,25 +362,13 @@ export async function collectReviewResult(
       const toolCall = dynamicToolCallSchema.safeParse(message);
 
       if (toolCall.success && dynamicTool?.tool.name === toolCall.data.params.tool) {
-        let text: string;
-        let success = true;
-
-        try {
-          text = await dynamicTool.tool.execute(toolCall.data.params.arguments);
-        } catch (error) {
-          success = false;
-          text = error instanceof Error ? error.message : "Claude handoff failed.";
-        }
-
-        try {
-          await dynamicTool.respond(toolCall.data.id, {
-            contentItems: [{ type: "inputText", text }],
-            success,
-          });
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : "unknown error";
-          throw new Error(`Codex dynamic-tool protocol failed: ${detail}`);
-        }
+        dynamicTool.onCallStarted?.(toolCall.data.params.callId);
+        const response = answerDynamicToolCall(
+          toolCall.data.id,
+          toolCall.data.params.arguments,
+          dynamicTool,
+        );
+        await response;
 
         continue;
       }
@@ -344,6 +381,13 @@ export async function collectReviewResult(
         findings: [],
         checks: [],
       };
+    }
+
+    const completedTool = dynamicToolCompletedSchema.safeParse(message);
+
+    if (completedTool.success) {
+      dynamicTool?.onCallAcknowledged?.(completedTool.data.params.item.id);
+      continue;
     }
 
     const lifecycle = codexLifecycleMessageSchema.safeParse(message);
@@ -404,4 +448,74 @@ export async function collectReviewResult(
 
     return parseReviewResult(finalAnswer);
   }
+}
+
+async function answerDynamicToolCall(
+  id: string | number,
+  argumentsValue: unknown,
+  bridge: DynamicToolBridge,
+): Promise<void> {
+  const outcome = await dynamicToolOutcome(
+    bridge.tool,
+    argumentsValue,
+    bridge.signal,
+  );
+
+  try {
+    await bridge.respond(id, {
+      contentItems: [{ type: "inputText", text: outcome.text }],
+      success: outcome.success,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown error";
+    throw new Error(`Codex dynamic-tool protocol failed: ${detail}`);
+  }
+}
+
+type DynamicToolOutcome = {
+  text: string;
+  success: boolean;
+};
+
+async function dynamicToolOutcome(
+  tool: CodexDynamicTool,
+  argumentsValue: unknown,
+  signal: AbortSignal | undefined,
+): Promise<DynamicToolOutcome> {
+  // Convert provider failures into tool results so Codex always receives the
+  // response required to keep its persisted thread resumable.
+  const execution = tool.execute(argumentsValue).then(
+    (text): DynamicToolOutcome => ({ text, success: true }),
+    (error: unknown): DynamicToolOutcome => ({
+      text: error instanceof Error ? error.message : "Claude handoff failed.",
+      success: false,
+    }),
+  );
+
+  if (!signal) {
+    return execution;
+  }
+
+  if (signal.aborted) {
+    return interruptedToolOutcome(signal);
+  }
+
+  let onAbort: () => void = () => undefined;
+  const interrupted = new Promise<DynamicToolOutcome>((resolve) => {
+    onAbort = () => resolve(interruptedToolOutcome(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([execution, interrupted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function interruptedToolOutcome(signal: AbortSignal): DynamicToolOutcome {
+  return {
+    text: interruptionFromSignal(signal).message,
+    success: false,
+  };
 }

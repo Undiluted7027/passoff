@@ -56,6 +56,17 @@ export const dynamicToolCallSchema = z.object({
   }),
 });
 
+export const dynamicToolCompletedSchema = z.object({
+  method: z.literal("item/completed"),
+  params: z.object({
+    item: z.looseObject({
+      type: z.literal("dynamicToolCall"),
+      id: z.string().min(1),
+      status: z.enum(["completed", "failed"]),
+    }),
+  }),
+});
+
 const itemCompletedSchema = z.object({
   method: z.literal("item/completed"),
   params: z.object({

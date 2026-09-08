@@ -94,7 +94,7 @@ test("a completed Claude stream returns its structured review", async () => {
   expect(sessions).toEqual(["claude-session-1"]);
   expect(progress).toEqual([
     "Claude is reviewing.\n",
-    "Claude is using Read.\n",
+    "Claude requested Read.\n",
   ]);
   expect(result).toEqual({
     status: "changes_requested",

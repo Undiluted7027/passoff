@@ -6,6 +6,7 @@ export type ReviewSessionInput = Omit<
   CodexReviewInput,
   | "nativeSessionId"
   | "onNativeSessionOpened"
+  | "onNativeSessionInvalidated"
   | "onProviderMessage"
   | "onApprovalRequired"
 > & {
@@ -13,7 +14,7 @@ export type ReviewSessionInput = Omit<
 };
 
 type ReviewSessionDependencies = {
-  sessionStore: Pick<SessionStore, "get" | "set">;
+  sessionStore: Pick<SessionStore, "get" | "set" | "delete">;
   runReview: (input: CodexReviewInput) => Promise<ReviewResult>;
   onSessionStarted?: (nativeSessionId: string) => Promise<void>;
   onProviderMessage?: (message: unknown) => void;
@@ -33,6 +34,7 @@ export async function runReviewSession(
   const nativeSessionId = sessionKey
     ? await dependencies.sessionStore.get(sessionKey)
     : undefined;
+  let currentNativeSessionId = nativeSessionId;
 
   return dependencies.runReview({
     ...reviewInput,
@@ -40,6 +42,7 @@ export async function runReviewSession(
     onProviderMessage: dependencies.onProviderMessage,
     onApprovalRequired: dependencies.onApprovalRequired,
     async onNativeSessionOpened(openedSessionId) {
+      currentNativeSessionId = openedSessionId;
       // Save before the turn starts. A malformed result or failed turn should
       // not discard a native thread that Codex can still resume.
       if (sessionKey) {
@@ -47,6 +50,14 @@ export async function runReviewSession(
       }
 
       await dependencies.onSessionStarted?.(openedSessionId);
+    },
+    async onNativeSessionInvalidated() {
+      if (sessionKey && currentNativeSessionId) {
+        await dependencies.sessionStore.delete(
+          sessionKey,
+          currentNativeSessionId,
+        );
+      }
     },
   });
 }

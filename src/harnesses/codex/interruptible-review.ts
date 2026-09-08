@@ -9,6 +9,7 @@ type InterruptibleReview<T> = {
   review: Promise<T>;
   signal?: AbortSignal;
   activeTurn: () => ActiveCodexTurn | undefined;
+  beforeInterrupt?: () => Promise<void>;
   interrupt: (turn: ActiveCodexTurn) => Promise<void>;
 };
 
@@ -22,10 +23,12 @@ export async function waitForReviewOrInterruption<T>(
 
   const signal = input.signal;
   let rejectInterruption: (error: Error) => void = () => undefined;
+  let cancellationCleanup: Promise<void> | undefined;
   const interrupted = new Promise<never>((_, reject) => {
     rejectInterruption = reject;
   });
-  const interruptThenReject = async () => {
+  const interruptThenReject = async (): Promise<void> => {
+    await input.beforeInterrupt?.().catch(() => undefined);
     const turn = input.activeTurn();
 
     if (turn) {
@@ -37,7 +40,7 @@ export async function waitForReviewOrInterruption<T>(
     rejectInterruption(interruptionFromSignal(signal));
   };
   const onAbort = () => {
-    void interruptThenReject();
+    cancellationCleanup ??= interruptThenReject();
   };
 
   if (signal.aborted) {
@@ -46,11 +49,29 @@ export async function waitForReviewOrInterruption<T>(
     signal.addEventListener("abort", onAbort, { once: true });
   }
 
+  let result: T;
+
   try {
-    return await Promise.race([input.review, interrupted]);
+    result = await Promise.race([input.review, interrupted]);
+  } catch (error) {
+    if (!cancellationCleanup) {
+      throw error;
+    }
+
+    // A provider failure can race with cancellation. Finish cleanup before
+    // exposing either outcome so an immediate retry cannot resume bad state.
+    await cancellationCleanup;
+    throw interruptionFromSignal(signal);
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
+
+  if (cancellationCleanup) {
+    await cancellationCleanup;
+    throw interruptionFromSignal(signal);
+  }
+
+  return result;
 }
 
 export async function interruptWithin(
@@ -60,21 +81,27 @@ export async function interruptWithin(
   await settleWithin(interrupt(turn), 1_000);
 }
 
-async function settleWithin(operation: Promise<void>, timeoutMs: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const timeout = setTimeout(finish, timeoutMs);
+export async function settleWithin(
+  operation: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let finished = false;
+    const timeout = setTimeout(() => finish(false), timeoutMs);
 
-    function finish(): void {
-      if (settled) {
+    function finish(settled: boolean): void {
+      if (finished) {
         return;
       }
 
-      settled = true;
+      finished = true;
       clearTimeout(timeout);
-      resolve();
+      resolve(settled);
     }
 
-    operation.then(finish, finish);
+    operation.then(
+      () => finish(true),
+      () => finish(true),
+    );
   });
 }

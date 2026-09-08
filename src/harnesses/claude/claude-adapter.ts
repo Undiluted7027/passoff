@@ -164,7 +164,7 @@ export async function collectClaudeReview(
           !reportedTools.has(block.name)
         ) {
           reportedTools.add(block.name);
-          callbacks.onProgress?.(`Claude is using ${block.name}.\n`);
+          callbacks.onProgress?.(`Claude requested ${block.name}.\n`);
         }
       }
 

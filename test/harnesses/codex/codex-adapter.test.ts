@@ -6,7 +6,11 @@ import {
   type RpcMessage,
 } from "../../../src/harnesses/codex/protocol.ts";
 import { rejectedError } from "../../support/rejected-error.ts";
-import { isHandoffInterruptedError } from "../../../src/harnesses/harness-interruption.ts";
+import {
+  HandoffInterruptedError,
+  isHandoffInterruptedError,
+} from "../../../src/harnesses/harness-interruption.ts";
+import { waitForReviewOrInterruption } from "../../../src/harnesses/codex/interruptible-review.ts";
 
 // Fixtures are sanitized app-server messages. Loading them from disk keeps the
 // ordinary test suite deterministic and prevents accidental model usage.
@@ -184,4 +188,111 @@ test("answers the registered dynamic tool and continues the Codex turn", async (
     },
   ]);
   expect(result.status).toBe("changes_requested");
+});
+
+test("answers an interrupted dynamic tool before interrupting the Codex turn", async () => {
+  const controller = new AbortController();
+  const toolStarted = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const responses: Array<{ success: boolean; text: string }> = [];
+  let callAcknowledged: Promise<void> | undefined;
+  let acknowledgeCall: (() => void) | undefined;
+  let deliveredRequest = false;
+  let deliveredAcknowledgement = false;
+
+  const toolRequest = rpcMessageSchema.parse({
+    id: 43,
+    method: "item/tool/call",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-2",
+      namespace: null,
+      tool: "ask_claude",
+      arguments: { task: "Review this.", session: "interrupted-review" },
+    },
+  });
+
+  const review = collectReviewResult(
+    async () => {
+      if (!deliveredRequest) {
+        deliveredRequest = true;
+        return toolRequest;
+      }
+
+      if (!deliveredAcknowledgement) {
+        deliveredAcknowledgement = true;
+        return rpcMessageSchema.parse({
+          method: "item/completed",
+          params: {
+            item: {
+              type: "dynamicToolCall",
+              id: "call-2",
+              status: "failed",
+            },
+          },
+        });
+      }
+
+      return new Promise<RpcMessage>(() => undefined);
+    },
+    undefined,
+    undefined,
+    {
+      signal: controller.signal,
+      tool: {
+        name: "ask_claude",
+        description: "Ask Claude.",
+        inputSchema: {},
+        async execute() {
+          toolStarted.resolve();
+          return new Promise<string>(() => undefined);
+        },
+      },
+      async respond(_id, response) {
+        order.push("tool response");
+        responses.push({
+          success: response.success,
+          text: response.contentItems[0]?.text ?? "",
+        });
+      },
+      onCallStarted(callId) {
+        expect(callId).toBe("call-2");
+        const acknowledgement = Promise.withResolvers<void>();
+        callAcknowledged = acknowledgement.promise;
+        acknowledgeCall = acknowledgement.resolve;
+      },
+      onCallAcknowledged(callId) {
+        expect(callId).toBe("call-2");
+        order.push("tool acknowledged");
+        acknowledgeCall?.();
+      },
+    },
+  );
+  const interrupted = waitForReviewOrInterruption({
+    review,
+    signal: controller.signal,
+    activeTurn: () => ({ threadId: "thread-1", turnId: "turn-1" }),
+    beforeInterrupt: async () => {
+      await callAcknowledged;
+    },
+    async interrupt() {
+      order.push("turn interrupt");
+    },
+  });
+
+  await toolStarted.promise;
+  controller.abort(
+    new HandoffInterruptedError("Review interrupted.", "caller_cancelled", 130),
+  );
+
+  expect(isHandoffInterruptedError(await rejectedError(interrupted))).toBe(true);
+  expect(order).toEqual([
+    "tool response",
+    "tool acknowledged",
+    "turn interrupt",
+  ]);
+  expect(responses).toEqual([
+    { success: false, text: "Review interrupted." },
+  ]);
 });

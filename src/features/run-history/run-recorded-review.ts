@@ -22,7 +22,7 @@ type RecordedReviewInput = {
 };
 
 type RecordedReviewDependencies = {
-  sessionStore: Pick<SessionStore, "get" | "set">;
+  sessionStore: Pick<SessionStore, "get" | "set" | "delete">;
   runStore: Pick<RunStore, "start">;
   runReview: (input: CodexReviewInput) => Promise<ReviewResult>;
   readRepositoryFingerprint: (

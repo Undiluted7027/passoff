@@ -8,6 +8,11 @@ import {
   type ClaudeReviewInput,
 } from "../../harnesses/claude/claude-adapter.ts";
 import type { CodexDynamicTool } from "../../harnesses/codex/codex-adapter.ts";
+import {
+  formatGitChangeContext,
+  readGitChangeContext,
+  type GitChangeContext,
+} from "./git-change-context.ts";
 
 const claudeReviewRequestSchema = z.strictObject({
   task: z.string().trim().min(1),
@@ -24,6 +29,11 @@ type ClaudeReviewToolInput = {
 
 type ClaudeReviewToolDependencies = {
   sessionStore: Pick<SessionStore, "get" | "set">;
+  readChangeContext?: (
+    repository: string,
+    baseRevision: string,
+    signal?: AbortSignal,
+  ) => Promise<GitChangeContext>;
   runReview?: (input: ClaudeReviewInput) => Promise<ReviewResult>;
 };
 
@@ -33,6 +43,8 @@ export function createClaudeReviewTool(
   dependencies: ClaudeReviewToolDependencies,
 ): CodexDynamicTool {
   const runReview = dependencies.runReview ?? runClaudeReview;
+  const readChangeContext =
+    dependencies.readChangeContext ?? readGitChangeContext;
 
   return {
     name: "ask_claude",
@@ -41,6 +53,11 @@ export function createClaudeReviewTool(
     inputSchema: z.toJSONSchema(claudeReviewRequestSchema),
     async execute(argumentsValue) {
       const request = claudeReviewRequestSchema.parse(argumentsValue);
+      const changeContext = await readChangeContext(
+        input.cwd,
+        input.baseRevision,
+        input.signal,
+      );
       const sessionKey = { harness: "claude", name: request.session };
       const nativeSessionId = await dependencies.sessionStore.get(sessionKey);
 
@@ -54,6 +71,7 @@ export function createClaudeReviewTool(
           task: request.task,
           repository: input.cwd,
           baseRevision: input.baseRevision,
+          changeContext: formatGitChangeContext(changeContext),
         }),
         outputSchema: reviewOutputSchema,
         nativeSessionId,

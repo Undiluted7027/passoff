@@ -196,6 +196,8 @@ Use `--restricted --strict-mcp-config` and an explicit tool list for reviewer ru
 
 The CLI adapter starts and resumes runs, translates the stream events Passoff uses, and reports completion, failure, denied tool calls, and questions. In print mode, Claude denies commands that need approval and includes them in the final `permission_denials` array. A stdio consumer does not receive an interactive approval callback, even with `--permission-prompts host`. A live approval loop would require the official Agent SDK or another supported permission host. Do not depend on Claude Code's private transcript layout.
 
+Claude does not receive Git command access. Before each new or resumed review, Passoff computes the changed-file list and tracked patch on the host. It sends at most 200 file names and 64 KiB of patch text, and marks the context incomplete when either limit is reached. Untracked files appear first in the file list so Claude can read them directly. Binary changes use Git's short summary instead of consuming the patch budget.
+
 ## Permissions
 
 The first target is a read-only reviewer. It can inspect files and Git state. It cannot edit files, commit, change configuration, or approve its own permission requests.

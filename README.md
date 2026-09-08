@@ -1,1 +1,6 @@
-# passoff
+# Passoff
+
+Passoff lets local coding harnesses hand work to one another. Each harness keeps its own session, tools, permissions, and authentication.
+
+- [Proof-of-concept specification](docs/poc.md)
+- [Feasibility spike](docs/feasibility-spike.md)

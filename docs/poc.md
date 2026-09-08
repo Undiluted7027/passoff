@@ -18,7 +18,7 @@ The first demo starts in Claude Code. Claude implements a feature, asks Codex to
 4. Codex reads the code and current diff, then reports its findings.
 5. Claude Code fixes the problems.
 6. Claude Code calls Passoff again with the same named Codex session.
-7. Codex resumes its thread, checks the fixes, and runs the relevant tests.
+7. Codex resumes its thread and checks the fixes.
 8. Codex returns its verdict.
 
 The loop requires no copying between terminals, and both native sessions remain usable afterward. Until this works reliably, there is no reason to build the rest of Passoff.
@@ -71,7 +71,7 @@ Use the same session name for a follow-up:
 ```bash
 passoff ask codex \
   --session auth-review \
-  "Verify the fixes and run the relevant tests"
+  "Verify the fixes"
 ```
 
 Progress goes to stderr. The final machine-readable result goes to stdout so scripts and parent agents can consume it without parsing progress logs.
@@ -168,7 +168,9 @@ The CLI adapter starts and resumes runs, translates the stream events Passoff us
 
 ## Permissions
 
-The first target is a read-only reviewer. It can inspect files and Git state, and run checks we explicitly allow. It cannot edit files, commit, change configuration, or approve its own permission requests.
+The first target is a read-only reviewer. It can inspect files and Git state. It cannot edit files, commit, change configuration, or approve its own permission requests.
+
+The first reviewer flow does not run project tests. Test suites often write caches, coverage data, snapshots, or generated files. Add test execution after we have measured those writes and can grant only the access each check needs.
 
 When Codex needs more access, Passoff emits `approval.required` from the app-server request and gives the decision back to the invoking harness or user. A Claude print-mode reviewer runs fail-closed: permission-requiring calls are denied and the final result is reported as blocked. A live Claude approval round trip requires the Agent SDK or another supported permission host. Blanket permission bypass flags are out.
 
@@ -176,20 +178,23 @@ An implementer role comes later and runs in an isolated Git worktree.
 
 ## Run records
 
-Store each run in three files:
+Store sessions and runs in the user's application-state directory, outside the target repository. Use the platform convention: `~/Library/Application Support/passoff` on macOS, `$XDG_STATE_HOME/passoff` or `~/.local/state/passoff` on Linux, and `%LOCALAPPDATA%\\passoff` on Windows.
+
+Key each project by a stable hash of its canonical repository path:
 
 ```text
-.passoff/
-└── runs/
-    └── <run-id>/
-        ├── handoff.json
-        ├── events.ndjson
-        └── result.json
+<state-dir>/
+└── projects/
+    └── <repository-key>/
+        ├── sessions.json
+        └── runs/
+            └── <run-id>/
+                ├── handoff.json
+                ├── events.ndjson
+                └── result.json
 ```
 
 Write files atomically when an interrupted write could corrupt the run. Records may contain native session IDs, task text, and model output. Do not intentionally record provider credentials or environment-variable values. Redact known sensitive fields before persisting provider payloads, and treat the remaining run record as sensitive because user-supplied tasks and model output can contain secrets.
-
-Before writing `.passoff/` inside another repository, make sure Git will ignore it. Editing an existing `.gitignore` requires permission under this repository's instructions.
 
 ## Review result
 

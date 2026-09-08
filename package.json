@@ -1,0 +1,29 @@
+{
+  "name": "passoff",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local task delegation between coding harnesses.",
+  "type": "module",
+  "bin": {
+    "passoff": "./src/cli.ts"
+  },
+  "scripts": {
+    "passoff": "bun src/cli.ts",
+    "dev": "bun src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun build ./src/cli.ts --target bun --outdir dist"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.2",
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "citty": "^0.2.2",
+    "zod": "^4.5.4"
+  }
+}

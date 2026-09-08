@@ -1,23 +1,20 @@
 #!/usr/bin/env bun
 
-const usage = `Passoff
+import { defineCommand, runMain } from "citty";
 
-Usage:
-  passoff ask <harness> [options] <task>
+const main = defineCommand({
+  meta: {
+    name: "passoff",
+    version: "0.0.0",
+    description: "Give bounded tasks to another coding harness.",
+  },
+  subCommands: {
+    // Help and version output should not load a provider adapter or touch local state.
+    ask: () =>
+      import("./features/ask-codex/command.ts").then(
+        ({ askCommand }) => askCommand,
+      ),
+  },
+});
 
-Commands:
-  ask       Give a bounded task to another coding harness
-
-Options:
-  -h, --help  Show this help
-`;
-
-const [command] = Bun.argv.slice(2);
-
-if (command === undefined || command === "--help" || command === "-h") {
-  console.log(usage);
-} else {
-  console.error(`Unknown command: ${command}\n`);
-  console.error(usage);
-  process.exitCode = 1;
-}
+await runMain(main);

@@ -1,0 +1,2 @@
+{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","completedAtMs":1,"item":{"type":"agentMessage","id":"message-1","text":"{\"status\":\"approved\",\"summary\":\"Looks good.\"}","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null}}}
+{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":{"type":"full"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
